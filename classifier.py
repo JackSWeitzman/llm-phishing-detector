@@ -42,6 +42,24 @@ def analyze_email(email):
     return response.choices[0].message.content
 
 
+def triage_email(prediction):
+    # AUTO-BLOCK - block immediately
+    # REVIEW - queue for analyst review
+    # PASS - pass through cleanly
+    # UNCERTAIN - flag for manual review
+
+    verdict = prediction["verdict"]
+    confidence = prediction["confidence"]
+
+    if verdict == "PHISHING" and confidence >= 80:
+        return "AUTO-BLOCK"
+    elif verdict == "PHISHING" and confidence >= 50:
+        return "REVIEW"
+    elif verdict == "LEGITIMATE" and confidence >= 80:
+        return "PASS"
+    else:
+        return "UNCERTAIN"
+
 TEST_EMAILS = [
     {
         "id": 1,
@@ -280,8 +298,13 @@ def evaluate_emails():
         if correct_verdict:
             correct += 1
 
-        status = "PASS" if correct_verdict else "FAIL"
+        triage = triage_email(prediction)
+        if correct_verdict:
+            status = "PASS" 
+        else:
+            status = "FAIL"
         print(f"Predicted: {verdict} (confidence: {confidence}%, risk: {risk}) [{status}]")
+        print(f"Triage decision: {triage}")
         print(f"Reasoning: {prediction['reasoning']}")
 
         results.append({
@@ -290,13 +313,15 @@ def evaluate_emails():
             "expected": test_email["label"],
             "predicted": verdict,
             "confidence": confidence,
-            "correct": correct_verdict
+            "correct": correct_verdict,
+            "triage": triage
         })
 
-    accuracy = (correct / total) * 100
     print("\n" + "=" * 60)
     print("EVALUATION SUMMARY")
     print("=" * 60)
+
+    accuracy = (correct / total) * 100
     print(f"Total emails tested: {total}")
     print(f"Correct predictions: {correct}")
     print(f"Accuracy: {accuracy:.1f}%")
@@ -310,5 +335,10 @@ def evaluate_emails():
     print(f"Phishing detection rate: {phishing_correct}/{len(phishing_emails)}")
     print(f"Legitimate classification rate: {real_correct}/{len(real_emails)}")
 
+    print("\nTriage breakdown:")
+    print(f"  AUTO-BLOCK: {sum(1 for r in results if r['triage'] == 'AUTO-BLOCK')}")
+    print(f"  REVIEW:     {sum(1 for r in results if r['triage'] == 'REVIEW')}")
+    print(f"  PASS:       {sum(1 for r in results if r['triage'] == 'PASS')}")
+    print(f"  UNCERTAIN:  {sum(1 for r in results if r['triage'] == 'UNCERTAIN')}")
 
 evaluate_emails()
