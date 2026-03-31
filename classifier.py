@@ -1,33 +1,33 @@
 import os
 import json
+import datetime
 from openai import OpenAI
 from dotenv import load_dotenv
 
 load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-SYSTEM_PROMPT = """You are a cybersecurity analyst specializing in email threat detection.
+SYSTEM_PROMPT = """
+You are a cybersecurity analyst specializing in email threat detection.
+Analyze emails and classify them as phishing or legitimate.
 
-Your job is to analyze emails and determine whether they are phishing attempts or legitimate.
-
-When analyzing an email, you must identify and explain the following signals:
-- Urgency or fear-based language designed to pressure the recipient
+Key signals to look for:
+- Urgency or fear-based language
 - Suspicious sender domains or spoofed identities
-- Requests for credentials, personal information, or financial action
+- Requests for credentials, personal info, or financial action
 - Suspicious or mismatched URLs
-- Impersonation of trusted brands or authorities
-- Grammatical anomalies or unusual phrasing
+- Brand/authority impersonation
+- Grammatical anomalies
 
-You must respond in exactly this JSON format and no other format:
+Respond in this JSON format only, no markdown:
 {
     "verdict": "PHISHING" or "LEGITIMATE",
     "confidence": a number between 0 and 100,
-    "signals": [list of specific signals you detected, each as a short string],
-    "reasoning": "a clear 2-3 sentence explanation of your verdict",
+    "signals": [list of detected signals as short strings],
+    "reasoning": "2-3 sentence explanation",
     "risk": "HIGH", "MEDIUM", or "LOW"
 }
-
-Do not include any text outside the JSON. Do not use markdown code blocks."""
+"""
 
 
 def analyze_email(email):
@@ -43,40 +43,56 @@ def analyze_email(email):
 
 
 def triage_email(prediction):
-    # AUTO-BLOCK - block immediately
-    # REVIEW - queue for analyst review
-    # PASS - pass through cleanly
-    # UNCERTAIN - flag for manual review
-
     verdict = prediction["verdict"]
     confidence = prediction["confidence"]
-
+    # Block it straight away
     if verdict == "PHISHING" and confidence >= 80:
         return "AUTO-BLOCK"
+    # Flag for human-review
     elif verdict == "PHISHING" and confidence >= 50:
         return "REVIEW"
+    # Legitimate, let it pass
     elif verdict == "LEGITIMATE" and confidence >= 80:
         return "PASS"
     else:
+        # Add something like human-review to check as it could be either
         return "UNCERTAIN"
     
 def get_metrics(results):
-    true_positives = sum(1 for i in results if i["expected"] == "PHISHING" and i["predicted"] == "PHISHING")
-    false_positives = sum(1 for i in results if i["expected"] == "LEGITIMATE" and i["predicted"] == "PHISHING")
-    false_negatives = sum(1 for i in results if i["expected"] == "PHISHING" and i["predicted"] == "LEGITIMATE")
-
-    precision = true_positives / (true_positives + false_positives) if (true_positives + false_positives) > 0 else 0
-    recall = true_positives / (true_positives + false_negatives) if (true_positives + false_negatives) > 0 else 0
+    tp = sum(1 for i in results if i["expected"] == "PHISHING" and i["predicted"] == "PHISHING")
+    fp = sum(1 for i in results if i["expected"] == "LEGITIMATE" and i["predicted"] == "PHISHING")
+    fn = sum(1 for i in results if i["expected"] == "PHISHING" and i["predicted"] == "LEGITIMATE")
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 0
     f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
-
     return {
-        "true_positives": true_positives,
-        "false_positives": false_positives,
-        "false_negatives": false_negatives,
+        "true_positives": tp,
+        "false_positives": fp,
+        "false_negatives": fn,
         "precision": round(precision, 3),
         "recall": round(recall, 3),
         "f1": round(f1, 3)
     }
+
+def save_results(results, metrics):
+    log = {
+        "timestamp": datetime.datetime.now().isoformat(),
+        "total_emails": len(results),
+        "accuracy": round(sum(1 for i in results if i["correct"]) / len(results) * 100, 1),
+        "metrics": metrics,
+        "triage_breakdown": {
+            "AUTO-BLOCK": sum(1 for i in results if i["triage"] == "AUTO-BLOCK"),
+            "REVIEW":     sum(1 for i in results if i["triage"] == "REVIEW"),
+            "PASS":       sum(1 for i in results if i["triage"] == "PASS"),
+            "UNCERTAIN":  sum(1 for i in results if i["triage"] == "UNCERTAIN")
+        },
+        "results": results
+    }
+
+    filename = f"evaluation_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    with open(filename, "w") as f:
+        json.dump(log, f, indent=2)
+    print(f"\nSaved - {filename}")
 
 TEST_EMAILS = [
     {
@@ -201,7 +217,7 @@ TEST_EMAILS = [
     {
         "id": 7,
         "label": "PHISHING",
-        "description": "Spear phishing - no obvious signals, perfect grammar, plausible sender",
+        "description": "Spear phishing - harder to catch, no obvious red flags",
         "email": """From: michael.brennan@ucc-research.ie
         Subject: Research collaboration opportunity
 
@@ -226,30 +242,6 @@ TEST_EMAILS = [
     },
     {
         "id": 8,
-        "label": "LEGITIMATE",
-        "description": "Legitimate IT email with urgent language and a link - looks suspicious",
-        "email": """From: it-support@yourcompany.com
-        Subject: Action required: Multi-factor authentication update
-
-        Hi Jack,
-
-        As part of our scheduled security upgrade this Friday, all employees
-        must re-enrol their multi-factor authentication device before 5pm today.
-
-        Failure to complete this before the deadline will result in loss of
-        access to company systems over the weekend.
-
-        Please complete your re-enrolment here:
-        https://yourcompany.okta.com/mfa-reenrolment
-
-        If you have any issues please contact the IT helpdesk directly on
-        extension 4400 or it-support@yourcompany.com.
-
-        IT Security Team
-        Your Company"""
-    },
-    {
-        "id": 9,
         "label": "PHISHING",
         "description": "Sophisticated BEC - no urgency, no suspicious URL, reads as completely normal",
         "email": """From: sarah.kelly@partnerfirm.ie
@@ -274,7 +266,7 @@ TEST_EMAILS = [
         Sarah"""
     },
     {
-        "id": 10,
+        "id": 9,
         "label": "LEGITIMATE",
         "description": "Legitimate password reset email - superficially looks like phishing",
         "email": """From: no-reply@accounts.google.com
@@ -292,6 +284,30 @@ TEST_EMAILS = [
         https://myaccount.google.com/security
 
         The Google Accounts Team"""
+    },
+    {
+    "id": 10,
+    "label": "LEGITIMATE",
+    "description": "Legitimate GitHub Actions workflow notification",
+    "email": """From: notifications@github.com
+    Subject: [jacksweitzman/llm-phishing-detector] Run failed: CI Pipeline
+
+    Hi Jack,
+
+    Your workflow run failed on push to main.
+
+    Repository: jacksweitzman/llm-phishing-detector
+    Workflow: CI Pipeline
+    Branch: main
+    Commit: d9fd832 - Add all project files
+
+    View the failed run:
+    https://github.com/jacksweitzman/llm-phishing-detector/actions/runs/14392810
+
+    You are receiving this because you have notifications enabled for
+    failed workflows on this repository.
+
+    GitHub"""
     }
 ]
 
@@ -300,18 +316,14 @@ def evaluate_emails():
     correct = 0
     total = len(TEST_EMAILS)
     results = []
-
     for test_email in TEST_EMAILS:
         print(f"\nTest {test_email['id']}: {test_email['description']}")
         print(f"Expected: {test_email['label']}")
-
         response = analyze_email(test_email["email"])
-
         prediction = json.loads(response)
         verdict = prediction["verdict"]
         confidence = prediction["confidence"]
         risk = prediction["risk"]
-
         correct_verdict = verdict == test_email["label"]
         if correct_verdict:
             correct += 1
@@ -343,13 +355,10 @@ def evaluate_emails():
 
     phishing_emails = [i for i in results if i["expected"] == "PHISHING"]
     real_emails = [i for i in results if i["expected"] == "LEGITIMATE"]
-
     phishing_correct = sum(1 for i in phishing_emails if i["correct"])
     real_correct = sum(1 for i in real_emails if i["correct"])
-
     print(f"Phishing detection rate: {phishing_correct}/{len(phishing_emails)}")
     print(f"Legitimate classification rate: {real_correct}/{len(real_emails)}")
-
     print("\nTriage breakdown:")
     print(f"AUTO-BLOCK: {sum(1 for i in results if i['triage'] == 'AUTO-BLOCK')}")
     print(f"REVIEW: {sum(1 for i in results if i['triage'] == 'REVIEW')}")
@@ -367,4 +376,6 @@ def evaluate_emails():
     print(f"Recall: {metrics['recall']}")
     print(f"F1 Score: {metrics['f1']}")
 
+    save_results(results, metrics)
+# Will run through each email individually and give various metrics regarding each email and the entire dataset at the end
 evaluate_emails()
